@@ -1,0 +1,17 @@
+# .gitignore
+
+# ไฟล์ Environment (ห้ามขึ้นเด็ดขาด)
+.env
+
+# โฟลเดอร์ที่ Go สร้างขึ้นเวลาคอมไพล์
+/bin
+/dist
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main  # ถ้าคุณ build แล้วได้ไฟล์ชื่อ main
+
+# โฟลเดอร์ IDE (ถ้าใช้ VSCode)
+.vscode/
