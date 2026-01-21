@@ -7,7 +7,7 @@ import (
 )
 
 func Routesja(app *fiber.App) {
-	app.Post("/getToken", c.GenToken)
-	app.Post("/send_smtp_report", c.SendSMTPReport)
+	app.Post("/getToken", c.HandleAPI)
+	// app.Post("/send_smtp_report", c.SendSMTPReport)
 
 }

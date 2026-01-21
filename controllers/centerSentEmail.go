@@ -3,9 +3,13 @@ package controllers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -30,8 +34,18 @@ type ReceiveResfomat struct {
 type SentNext struct {
 	TranfersIdSentOut string `json:"transferId" validate:"required"`
 }
+type TokenWithId struct {
+	TransferId string `json:"transfer_id"`
+	Token      string `json:"token"`
+}
+type APIResponseToUsers struct {
+	TransferId string `json:"transfer_id"`
+	Token      string `json:"token"`
+	Fullurl    string `json:"full_url"`
+	Shoturl    string `json:"short_url"`
+}
 
-func GenToken(c *fiber.Ctx) error {
+func HandleAPI(c *fiber.Ctx) error {
 	var req ReceiveResfomat
 
 	err := godotenv.Load()
@@ -63,9 +77,17 @@ func GenToken(c *fiber.Ctx) error {
 			"error": "Type should be Income or Transfer ",
 		})
 	}
+	resultUrl, err := GenToken(req)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to generate token",
+		})
+	}
 
+}
+
+func GenToken(req ReceiveResfomat) (string, error) {
 	log.Printf("Received Type: %s with %d details", req.Type, len(req.Detail))
-
 	var IdResult []SentNext
 
 	for _, v := range req.Detail {
@@ -75,10 +97,6 @@ func GenToken(c *fiber.Ctx) error {
 		IdResult = append(IdResult, re) // output jaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 	}
 
-	type TokenWithId struct {
-		TransferId string `json:"transfer_id"`
-		Token      string `json:"token"`
-	}
 	type APIResponse struct {
 		Token string `json:"token"`
 	}
@@ -112,6 +130,60 @@ func GenToken(c *fiber.Ctx) error {
 			tkid = append(tkid, newItem)
 		}()
 	}
+	urlResultList, err := UrlCreate(tkid)
+	if err != nil {
+		return "", err
+	}
 
-	return c.Status(200).JSON(tkid)
+	if len(urlResultList) > 0 {
+		return urlResultList[0].Shoturl, nil
+	}
+
+	return "", fmt.Errorf("no url generated")
+}
+
+////////////////////////////////////////////////////////////////////////
+
+func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
+	var res []APIResponseToUsers
+	for _, token := range tkid {
+		fullUrl := os.Getenv("URL_LINK_FOLLOW_TOKEN") + token.Token
+
+		var shortUrl string = ""
+		maxRetries := 3
+
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+
+			reqBody := bytes.NewBuffer([]byte(fullUrl))
+
+			resp, err := http.Post(
+				os.Getenv("URL_ONE_GENERATE_SHOT_LINK"),
+				"application/json",
+				reqBody,
+			)
+
+			if err == nil {
+				defer resp.Body.Close()
+
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				shortUrl = string(bodyBytes)
+				break
+			}
+
+			log.Printf("Attempt %d/%d failed for token %s: %v", attempt, maxRetries, token.Token, err)
+
+			if attempt < maxRetries {
+				time.Sleep(1 * time.Second)
+			}
+		}
+		r := APIResponseToUsers{
+			TransferId: token.TransferId,
+			Token:      token.Token,
+			Fullurl:    fullUrl,
+			Shoturl:    shortUrl,
+		}
+		res = append(res, r)
+	}
+
+	return res, nil
 }

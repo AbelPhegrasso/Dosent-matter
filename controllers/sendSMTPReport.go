@@ -28,7 +28,7 @@ type TokenResponse struct {
 }
 
 type ReqToGenTokenPDF struct {
-	TransferId      string          `json:"transferId"`
+	TransferId string `json:"transferId"`
 }
 
 type ReqShortLink struct {
@@ -42,7 +42,7 @@ type RespShortLink struct {
 }
 
 type SendSMTPReportRequest struct {
-	AccountName   string          `json:"accountName"`
+	AccountName  string          `json:"accountName"`
 	MinDateTime  string          `json:"minDateTime"`
 	MaxDateTime  string          `json:"maxDateTime"`
 	SumTxnCount  string          `json:"sumTxnCount"`
@@ -50,11 +50,13 @@ type SendSMTPReportRequest struct {
 	UrlDownload  string          `json:"urlDownload"`
 	MailTo       string          `json:"mailTo"`
 	RandomID     int             `json:"randomID"`
-	Transfers     []TransferToken `json:"transfers"`
-
+	Transfers    []TransferToken `json:"transfers"`
 }
 
-
+type ResponseBack struct {
+	Fulllink  string `json:"full-link"`
+	Shortlink string `json:"short-link"`
+}
 
 func buildDownloadLink(token string) string {
 	baseURL := os.Getenv("BASE_DOWNLOAD_URL")
@@ -62,15 +64,15 @@ func buildDownloadLink(token string) string {
 }
 
 func cleanEmails(emails string) []string {
-    raw := strings.Split(emails, ",")
-    var result []string
-    for _, e := range raw {
-        e = strings.TrimSpace(e) // ตัดช่องว่างซ้าย/ขวา
-        if e != "" {
-            result = append(result, e)
-        }
-    }
-    return result
+	raw := strings.Split(emails, ",")
+	var result []string
+	for _, e := range raw {
+		e = strings.TrimSpace(e) // ตัดช่องว่างซ้าย/ขวา
+		if e != "" {
+			result = append(result, e)
+		}
+	}
+	return result
 }
 
 func goToSMTP(
@@ -82,7 +84,7 @@ func goToSMTP(
 	urlDownload string,
 	mailTo string,
 	randomID int,
-) error {
+) (ResponseBack, error) {
 
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
@@ -91,58 +93,78 @@ func goToSMTP(
 	smtpFrom := os.Getenv("MAIL_FROM")
 	fromName := os.Getenv("MAIL_FROM_NAME")
 
-		// Step 1: Get short link
-
 	reqShortLink := ReqShortLink{Link: urlDownload}
 
 	jsonData, err := json.Marshal(reqShortLink)
 	if err != nil {
-		return err
+		return ResponseBack{}, err
 	}
 
-	resp, err := http.Post(
-		os.Getenv("URL_ONE_GENERATE_SHOT_LINK"),
-		"application/json",
-		bytes.NewBuffer(jsonData),
-	)
+	var resp *http.Response
+	maxRetries := 3
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err = http.Post(
+			os.Getenv("URL_ONE_GENERATE_SHOT_LINK"),
+			"application/json",
+			bytes.NewBuffer(jsonData),
+		)
+
+		if err == nil {
+			break
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	if err != nil {
-		return err
+		link_r := ResponseBack{
+			Fulllink:  urlDownload,
+			Shortlink: "",
+		}
+		return link_r, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return ResponseBack{}, err
 	}
 
 	var respShortLink RespShortLink
 	if err := json.Unmarshal(body, &respShortLink); err != nil {
-		return err
+		return ResponseBack{}, err
 	}
 
 	if respShortLink.Data.ShortLink == "" {
-		return fmt.Errorf("short link empty")
+		return ResponseBack{}, fmt.Errorf("short link empty")
 	}
 
 	link := respShortLink.Data.ShortLink
-	log.Printf("[%d]Generated Short Link: %s", randomID, link)
 
-		// Step 2: Prepare the email
+	link_r := ResponseBack{
+		Fulllink:  urlDownload,
+		Shortlink: link,
+	}
+
+	log.Printf("[%d] Generated Short Link: %s", randomID, link)
 
 	fromHeader := fmt.Sprintf("%s <%s>", fromName, smtpFrom)
 	subject := "รายงานโอนเงินกลับประจำวัน"
 
 	bodyText := fmt.Sprintf(`<p>เรียน %s,</p><br/>
-		<p>ทางบริษัทฯ ส่วนงานการรับชำระเงิน ได้ส่งรายงานการโอนเงิน Online Payment Services (OPS) ประจำวันที่ %s มาให้ท่าน โดยมีรายละเอียดดังนี้</p><br/><br/>
-		<p>จำนวนรายการ : %s รายการ</p>
-		<p>ยอดรับชำระเงิน : %s บาท</p><br/>
-		<p>ทั้งนี้ สามารถดาวน์โหลดรายละเอียดการรับเงินได้ที่ %s</p><br/>
-		<p>หากท่านต้องการข้อมูลเพิ่มเติม โปรดติดต่อ ทางบริษัทฯ ส่วนงานการรับชำระเงิน ผ่านช่องทางต่าง ๆ ดังนี้</p>
-		<p>E-mail : online-support@inet.co.th</p>
-		<p>ขอแสดงความนับถือ</p>
-		<p>บริษัทฯ ส่วนงานการรับชำระเงิน</p>`,
+        <p>ทางบริษัทฯ ส่วนงานการรับชำระเงิน ได้ส่งรายงานการโอนเงิน Online Payment Services (OPS) ประจำวันที่ %s มาให้ท่าน โดยมีรายละเอียดดังนี้</p><br/><br/>
+        <p>จำนวนรายการ : %s รายการ</p>
+        <p>ยอดรับชำระเงิน : %s บาท</p><br/>
+        <p>ทั้งนี้ สามารถดาวน์โหลดรายละเอียดการรับเงินได้ที่ %s</p><br/>
+        <p>หากท่านต้องการข้อมูลเพิ่มเติม โปรดติดต่อ ทางบริษัทฯ ส่วนงานการรับชำระเงิน ผ่านช่องทางต่าง ๆ ดังนี้</p>
+        <p>E-mail : online-support@inet.co.th</p>
+        <p>ขอแสดงความนับถือ</p>
+        <p>บริษัทฯ ส่วนงานการรับชำระเงิน</p>`,
 		accountName, time.Now().Format("02/01/2006"), sumTxnCount, sumTxnAmount, link)
-	
+
 	to := cleanEmails(mailTo)
 	bcc := cleanEmails(os.Getenv("MAIL_BCC"))
 	allRecipients := append(to, bcc...)
@@ -159,52 +181,58 @@ func goToSMTP(
 			bodyText,
 	)
 
-	// ===== Connect using STARTTLS =====
 	conn, err := net.Dial("tcp", smtpHost+":"+smtpPort)
 	if err != nil {
-		return err
+		return link_r, err
 	}
 	defer conn.Close()
 
 	client, err := smtp.NewClient(conn, smtpHost)
 	if err != nil {
-		return err
+		return link_r, err
 	}
 	defer client.Quit()
 
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		tlsConfig := &tls.Config{ServerName: smtpHost}
 		if err := client.StartTLS(tlsConfig); err != nil {
-			return err
+			return link_r, err
 		}
 	}
 
-	// ===== Enable SMTP Auth (สำคัญมากสำหรับ SPF/DMARC) =====
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 	if err := client.Auth(auth); err != nil {
-		return err
+		return link_r, err
 	}
 
 	if err := client.Mail(smtpFrom); err != nil {
-		return err
+		return link_r, err
 	}
 
 	for _, addr := range allRecipients {
 		if err := client.Rcpt(addr); err != nil {
-			return err
+			return link_r, err
 		}
 	}
 
 	w, err := client.Data()
 	if err != nil {
-		return err
+		return link_r, err
 	}
-	defer w.Close()
 
 	_, err = w.Write(msg)
-	return err
-}
+	if err != nil {
+		w.Close()
+		return link_r, err
+	}
 
+	err = w.Close()
+	if err != nil {
+		return link_r, err
+	}
+
+	return link_r, nil
+}
 
 func GenPDFLinks(tokens []TransferToken) []string {
 	var links []string
@@ -221,56 +249,56 @@ func GenPDFLinks(tokens []TransferToken) []string {
 	return links
 }
 
-func PostJSONGentokenPDF(transferId string) (string, error) {
+// func PostJSONGentokenPDF(transferId string) (string, error) {
 
-	url := os.Getenv("URL_LINK_GEN_TOKEN_PDF")
-	secret := os.Getenv("SECRECT_KEY")
+// 	url := os.Getenv("URL_LINK_GEN_TOKEN_PDF")
+// 	secret := os.Getenv("SECRECT_KEY")
 
-	payload := map[string]interface{}{
-		"key":  secret,
-		"type": "Transfer",
-		"details": []map[string]string{
-			{
-				"transfer_id": transferId,
-			},
-		},
-	}
+// 	payload := map[string]interface{}{
+// 		"key":  secret,
+// 		"type": "Transfer",
+// 		"details": []map[string]string{
+// 			{
+// 				"transfer_id": transferId,
+// 			},
+// 		},
+// 	}
 
-	jsonData, _ := json.Marshal(payload)
+// 	jsonData, _ := json.Marshal(payload)
 
-	log.Println("REQUEST TO GEN TOKEN:", string(jsonData))
+// 	log.Println("REQUEST TO GEN TOKEN:", string(jsonData))
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
+// 	client := &http.Client{Timeout: 10 * time.Second}
+// 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+// 	resp, err := client.Do(req)
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	defer resp.Body.Close()
 
-	body, _ := ioutil.ReadAll(resp.Body)
-	log.Println("RAW TOKEN RESPONSE:", string(body))
+// 	body, _ := ioutil.ReadAll(resp.Body)
+// 	log.Println("RAW TOKEN RESPONSE:", string(body))
 
-	var res []struct {
-		TransferID string `json:"transfer_id"`
-		Token      string `json:"token"`
-	}
+// 	var res []struct {
+// 		TransferID string `json:"transfer_id"`
+// 		Token      string `json:"token"`
+// 	}
 
-	if err := json.Unmarshal(body, &res); err != nil {
-		return "", err
-	}
+// 	if err := json.Unmarshal(body, &res); err != nil {
+// 		return "", err
+// 	}
 
-	if len(res) == 0 || res[0].Token == "" {
-		return "", fmt.Errorf("token empty")
-	}
+// 	if len(res) == 0 || res[0].Token == "" {
+// 		return "", fmt.Errorf("token empty")
+// 	}
 
-	return res[0].Token, nil
-}
+// 	return res[0].Token, nil
+// }
 
 func SendSMTPReport(c *fiber.Ctx) error {
 
@@ -278,26 +306,26 @@ func SendSMTPReport(c *fiber.Ctx) error {
 
 	if err := c.BodyParser(&tokens); err != nil {
 		return c.Status(400).JSON(fiber.Map{
-			"responseCode": "99",
+			"responseCode":    "99",
 			"responseMessage": "invalid request body",
 		})
 	}
 
 	if len(tokens) == 0 {
 		return c.Status(400).JSON(fiber.Map{
-			"responseCode": "98",
+			"responseCode":    "98",
 			"responseMessage": "token list empty",
 		})
 	}
 
 	basePDF := os.Getenv("URL_LINKPDF")
-	accountName  := "Test Name"
-	minDateTime  := "2026-01-01"
-	maxDateTime  := "2026-02-01"
-	sumTxnCount  := "100"
+	accountName := "Test Name"
+	minDateTime := "2026-01-01"
+	maxDateTime := "2026-02-01"
+	sumTxnCount := "100"
 	sumTxnAmount := "10000"
-	mailTo       := "boxblue779@email.com"
-	randomID     := 1000
+	mailTo := "boxblue779@email.com"
+	randomID := 1000
 
 	for i, t := range tokens {
 
@@ -309,30 +337,27 @@ func SendSMTPReport(c *fiber.Ctx) error {
 		longLink := basePDF + t.Token
 		log.Printf("[%d] transfer_id=%s pdf=%s", i, t.TransferID, longLink)
 
-		err := goToSMTP(
+		respBack, err := goToSMTP(
 			accountName,
 			minDateTime,
 			maxDateTime,
 			sumTxnCount,
 			sumTxnAmount,
-			longLink,     
+			longLink,
 			mailTo,
 			randomID+i,
 		)
 
 		if err != nil {
 			log.Printf("[%d] send mail failed (%s): %v", i, t.TransferID, err)
+
+			if respBack.Shortlink != "" {
+				log.Printf("[%d] (Partial Success) Mail failed but ShortLink created: %s", i, respBack.Shortlink)
+			}
+		} else {
+			log.Printf("[%d] Mail sent successfully. ShortLink: %s", i, respBack.Shortlink)
 		}
 	}
 
-	return c.Status(200).JSON(fiber.Map{
-		"responseCode": "00",
-		"responseMessage": "Success",
-	})
+	return c.Status(200).JSON(fiber.Map{"responseMessage": "Success"})
 }
-
-
-
-
-
-
