@@ -239,10 +239,11 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				} `json:"data"`
 			}
 
-			if err := json.Unmarshal(bodyBytes, &slResp); err == nil {
-				shortUrl = slResp.Data.ShortLink
+				if err := json.Unmarshal(bodyBytes, &slResp); err == nil {
+					shortUrl = slResp.Data.ShortLink
+				}
+				break
 			}
-		}
 
 			log.Printf("Attempt %d/%d failed for token %s: %v", attempt, maxRetries, token.Token, err)
 
@@ -325,16 +326,16 @@ func gotoMail (m *MailDetail,res APIResponseToUsers) MailPayload{
 
 	body := fmt.Sprintf(
 		`<p>เรียน %s,</p><br/>
-		<p>รายงานประจำวันที่ %s</p>
-		<p>จำนวนรายการ : %s</p>
-		<p>ยอดรวม : %s บาท</p><br/>
-		<p>ดาวน์โหลดได้ที่ %s</p>`,
-		m.AccountName,
-		time.Now().Format("02/01/2006"),
-		m.SumTxnCount,
-		m.SumTxnAmount,
-		link,
-	)
+        <p>ทางบริษัทฯ ส่วนงานการรับชำระเงิน ได้ส่งรายงานการโอนเงิน Online Payment Services (OPS) ประจำวันที่ %s มาให้ท่าน โดยมีรายละเอียดดังนี้</p><br/><br/>
+        <p>จำนวนรายการ : %s รายการ</p>
+        <p>ยอดรับชำระเงิน : %s บาท</p><br/>
+        <p>ทั้งนี้ สามารถดาวน์โหลดรายละเอียดการรับเงินได้ที่ %s</p><br/>
+        <p>หากท่านต้องการข้อมูลเพิ่มเติม โปรดติดต่อ ทางบริษัทฯ ส่วนงานการรับชำระเงิน ผ่านช่องทางต่าง ๆ ดังนี้</p>
+        <p>E-mail : online-support@inet.co.th</p>
+        <p>ขอแสดงความนับถือ</p>
+        <p>บริษัทฯ ส่วนงานการรับชำระเงิน</p>`,
+		m.AccountName, time.Now().Format("02/01/2006"), m.SumTxnCount, m.SumTxnAmount, link)
+
 
 	return MailPayload{
 		FromHeader: fmt.Sprintf("%s <%s>", fromName, smtpFrom),
@@ -359,14 +360,19 @@ func sendMail(p MailPayload) error {
 
 	allRecipients := append(p.To, p.Bcc...)
 
-	msg := []byte(
-		"From: " + p.FromHeader + "\r\n" +
+		msg := []byte(
+		"Return-Path: " + smtpFrom + "\r\n" +
+			"From: " + p.FromHeader + "\r\n" +
 			"To: " + strings.Join(p.To, ",") + "\r\n" +
 			"Subject: " + p.Subject + "\r\n" +
+			"Date: " + time.Now().Format(time.RFC1123Z) + "\r\n" +
+			"Message-ID: <" + fmt.Sprintf("%d", time.Now().UnixNano()) + "@thaidotcompayment.co.th>\r\n" +
 			"MIME-Version: 1.0\r\n" +
 			"Content-Type: text/html; charset=UTF-8\r\n\r\n" +
 			p.Body,
 	)
+
+	
 
 	maxRetries := 3
 	var lastErr error
@@ -376,7 +382,7 @@ func sendMail(p MailPayload) error {
 		conn, err := net.Dial("tcp", smtpHost+":"+smtpPort)
 		if err != nil {
 			lastErr = err
-			log.Printf("[SMTP] attempt %d/%d dial error: %v", attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d dial error: %v", p.TransferId,attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -385,7 +391,7 @@ func sendMail(p MailPayload) error {
 		if err != nil {
 			conn.Close()
 			lastErr = err
-			log.Printf("[SMTP] attempt %d/%d client error: %v", attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d client error: %v",p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -395,7 +401,7 @@ func sendMail(p MailPayload) error {
 				client.Quit()
 				conn.Close()
 				lastErr = err
-				log.Printf("[SMTP] attempt %d/%d starttls error: %v", attempt, maxRetries, err)
+				log.Printf("%s [SMTP] attempt %d/%d starttls error: %v",p.TransferId, attempt, maxRetries, err)
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
 			}
@@ -405,7 +411,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("[SMTP] attempt %d/%d auth error: %v", attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d auth error: %v",p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -414,7 +420,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("[SMTP] attempt %d/%d mail from error: %v", attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d mail from error: %v",p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -424,7 +430,7 @@ func sendMail(p MailPayload) error {
 				client.Quit()
 				conn.Close()
 				lastErr = err
-				log.Printf("[SMTP] attempt %d/%d rcpt error: %v", attempt, maxRetries, err)
+				log.Printf("%s [SMTP] attempt %d/%d rcpt error: %v",p.TransferId, attempt, maxRetries, err)
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
 			}
@@ -435,7 +441,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("[SMTP] attempt %d/%d data error: %v", attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d data error: %v",p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -445,7 +451,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("[SMTP] attempt %d/%d write error: %v", attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d write error: %v",p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -454,7 +460,7 @@ func sendMail(p MailPayload) error {
 		client.Quit()
 		conn.Close()
 
-		log.Printf("[SMTP] send success on attempt %d", attempt)
+		log.Printf("%s [SMTP] send success on attempt %d",p.TransferId, attempt)
 		return nil
 	}
 
