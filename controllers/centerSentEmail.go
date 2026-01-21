@@ -2,12 +2,16 @@ package controllers
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/smtp"
 	"os"
+	"strings"
 
 	"time"
 
@@ -25,14 +29,14 @@ type DetailRes struct {
 	EndDate     string `json:"end_date"`
 }
 
-type ReceiveResfomat struct {
+type ReceiveResFormat struct {
 	Key    string      `json:"key" validate:"required"`
 	Type   string      `json:"type" validate:"required,oneof=Transfer Income"`
 	Detail []DetailRes `json:"details" validate:"min=1,dive"`
 }
 
 type SentNext struct {
-	TranfersIdSentOut string `json:"transferId" validate:"required"`
+	TransferIdSentOut string `json:"transferId" validate:"required"`
 }
 type TokenWithId struct {
 	TransferId string `json:"transfer_id"`
@@ -45,8 +49,45 @@ type APIResponseToUsers struct {
 	Shoturl    string `json:"short_url"`
 }
 
+type MailDetail struct {
+	AccountName  string          `json:"accountName"`
+	MinDateTime  string          `json:"minDateTime"`
+	MaxDateTime  string          `json:"maxDateTime"`
+	SumTxnCount  string          `json:"sumTxnCount"`
+	SumTxnAmount string          `json:"sumTxnAmount"`
+}
+
+type MailResult struct {
+	TransferId string
+	ShortLink   string
+	FullLink string
+}
+
+type MailPayload struct {
+	FromHeader string
+	Subject    string
+	Body       string
+	To         []string
+	Bcc        []string
+	ShortLink   string
+	FullLink string
+	TransferId string
+}
+
+type MailSendResult struct {
+	TransferId	string `json:"transfer_id"`
+	Email		string `json:"email"`
+	ShortLink	string `json:"short_link"`
+	FullLink	string `json:"full_link"`
+	Status		string `json:"status"` // SUCCESS | FAIL
+	Error		string `json:"error,omitempty"`
+}
+
+
+
+
 func HandleAPI(c *fiber.Ctx) error {
-	var req ReceiveResfomat
+	var req ReceiveResFormat
 
 	err := godotenv.Load()
 	if err != nil {
@@ -77,22 +118,44 @@ func HandleAPI(c *fiber.Ctx) error {
 			"error": "Type should be Income or Transfer ",
 		})
 	}
-	resultUrl, err := GenToken(req)
+	
+	urlResults, err := GenToken(req)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+		return c.Status(500).JSON(fiber.Map{
 			"error": "Failed to generate token",
 		})
 	}
 
+	mailResults := processMailSend(urlResults)
+
+	success := 0
+	fail := 0
+	for _, r := range mailResults {
+		if r.Status == "SUCCESS" {
+			success++
+		} else {
+			fail++
+		}
+	}
+
+	return c.Status(200).JSON(fiber.Map{
+		"responseCode": "00",
+		"summary": fiber.Map{
+			"total":   len(mailResults),
+			"success": success,
+			"fail":    fail,
+		},
+		"results": mailResults,
+	})
 }
 
-func GenToken(req ReceiveResfomat) (string, error) {
+func GenToken(req ReceiveResFormat) ([]APIResponseToUsers, error) {
 	log.Printf("Received Type: %s with %d details", req.Type, len(req.Detail))
 	var IdResult []SentNext
 
 	for _, v := range req.Detail {
 		re := SentNext{
-			TranfersIdSentOut: v.TransferId,
+			TransferIdSentOut: v.TransferId,
 		}
 		IdResult = append(IdResult, re) // output jaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 	}
@@ -103,7 +166,7 @@ func GenToken(req ReceiveResfomat) (string, error) {
 
 	var tkid []TokenWithId
 	for i, v := range IdResult {
-		payload, _ := json.Marshal(map[string]string{"transferId": v.TranfersIdSentOut})
+		payload, _ := json.Marshal(map[string]string{"transferId": v.TransferIdSentOut})
 		resp, err := http.Post(os.Getenv("URL_ONE_GENERATE_TOKEN"), "application/json", bytes.NewBuffer(payload))
 		if err != nil {
 			log.Printf("Error sending request for item %d: %v", i, err)
@@ -123,23 +186,20 @@ func GenToken(req ReceiveResfomat) (string, error) {
 			}
 
 			newItem := TokenWithId{
-				TransferId: v.TranfersIdSentOut,
+				TransferId: v.TransferIdSentOut,
 				Token:      apiRes.Token,
 			}
 
 			tkid = append(tkid, newItem)
 		}()
 	}
+
 	urlResultList, err := UrlCreate(tkid)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	if len(urlResultList) > 0 {
-		return urlResultList[0].Shoturl, nil
-	}
-
-	return "", fmt.Errorf("no url generated")
+	return urlResultList, nil
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -152,28 +212,42 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 		var shortUrl string = ""
 		maxRetries := 3
 
-		for attempt := 1; attempt <= maxRetries; attempt++ {
+		reqObj := map[string]string{
+			"link": fullUrl,
+		}
+		jsonBody, err := json.Marshal(reqObj)
+		if err != nil {
+			return nil, err
+		}
 
-			reqBody := bytes.NewBuffer([]byte(fullUrl))
+		for attempt := 1; attempt <= maxRetries; attempt++ {
 
 			resp, err := http.Post(
 				os.Getenv("URL_ONE_GENERATE_SHOT_LINK"),
 				"application/json",
-				reqBody,
+				bytes.NewBuffer(jsonBody),
 			)
 
 			if err == nil {
-				defer resp.Body.Close()
+			defer resp.Body.Close()
 
-				bodyBytes, _ := io.ReadAll(resp.Body)
-				shortUrl = string(bodyBytes)
-				break
+			bodyBytes, _ := io.ReadAll(resp.Body)
+
+			var slResp struct {
+				Data struct {
+					ShortLink string `json:"short-link"`
+				} `json:"data"`
 			}
+
+			if err := json.Unmarshal(bodyBytes, &slResp); err == nil {
+				shortUrl = slResp.Data.ShortLink
+			}
+		}
 
 			log.Printf("Attempt %d/%d failed for token %s: %v", attempt, maxRetries, token.Token, err)
 
 			if attempt < maxRetries {
-				time.Sleep(1 * time.Second)
+				time.Sleep(3 * time.Second)
 			}
 		}
 		r := APIResponseToUsers{
@@ -187,3 +261,204 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 
 	return res, nil
 }
+
+func cleanEmail(emails string) []string {
+	raw := strings.Split(emails, ",")
+	var result []string
+	for _, e := range raw {
+		e = strings.TrimSpace(e) // ตัดช่องว่างซ้าย/ขวา
+		if e != "" {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
+
+	var results []MailSendResult
+
+	for _, r := range urlResults {
+
+		var mail MailDetail
+		payload := gotoMail(&mail, r)
+
+		err := sendMail(payload)
+
+		result := MailSendResult{
+			TransferId: r.TransferId,
+			Email:      strings.Join(payload.To, ","),
+			ShortLink:   payload.ShortLink,
+			FullLink:	payload.FullLink,
+		}
+
+		if err != nil {
+			result.Status = "FAIL"
+			result.Error = err.Error()
+		} else {
+			result.Status = "SUCCESS"
+		}
+
+		results = append(results, result)
+	}
+
+	return results
+}
+
+
+
+func gotoMail (m *MailDetail,res APIResponseToUsers) MailPayload{
+
+	m.AccountName = "Name"
+	m.MinDateTime = "2026-01-01"
+	m.MaxDateTime = "2026-01-02"
+	m.SumTxnCount = "100"
+	m.SumTxnAmount = "1000"
+
+	link := res.Shoturl
+	if link == "" {
+		link = res.Fullurl
+	}
+
+	fromName := os.Getenv("MAIL_FROM_NAME")
+	smtpFrom := os.Getenv("MAIL_FROM")
+
+	body := fmt.Sprintf(
+		`<p>เรียน %s,</p><br/>
+		<p>รายงานประจำวันที่ %s</p>
+		<p>จำนวนรายการ : %s</p>
+		<p>ยอดรวม : %s บาท</p><br/>
+		<p>ดาวน์โหลดได้ที่ %s</p>`,
+		m.AccountName,
+		time.Now().Format("02/01/2006"),
+		m.SumTxnCount,
+		m.SumTxnAmount,
+		link,
+	)
+
+	return MailPayload{
+		FromHeader: fmt.Sprintf("%s <%s>", fromName, smtpFrom),
+		Subject:    "รายงานโอนเงินกลับประจำวัน",
+		Body:       body,
+		To:         cleanEmails("boxblue779@gmail.com"),
+		Bcc:        cleanEmails(os.Getenv("MAIL_BCC")),
+		ShortLink:   link,
+		FullLink: res.Fullurl,
+		TransferId: res.TransferId,
+	}
+
+}
+
+func sendMail(p MailPayload) error {
+
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPass := os.Getenv("SMTP_PASS")
+	smtpFrom := os.Getenv("MAIL_FROM")
+
+	allRecipients := append(p.To, p.Bcc...)
+
+	msg := []byte(
+		"From: " + p.FromHeader + "\r\n" +
+			"To: " + strings.Join(p.To, ",") + "\r\n" +
+			"Subject: " + p.Subject + "\r\n" +
+			"MIME-Version: 1.0\r\n" +
+			"Content-Type: text/html; charset=UTF-8\r\n\r\n" +
+			p.Body,
+	)
+
+	maxRetries := 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+
+		conn, err := net.Dial("tcp", smtpHost+":"+smtpPort)
+		if err != nil {
+			lastErr = err
+			log.Printf("[SMTP] attempt %d/%d dial error: %v", attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		client, err := smtp.NewClient(conn, smtpHost)
+		if err != nil {
+			conn.Close()
+			lastErr = err
+			log.Printf("[SMTP] attempt %d/%d client error: %v", attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(&tls.Config{ServerName: smtpHost}); err != nil {
+				client.Quit()
+				conn.Close()
+				lastErr = err
+				log.Printf("[SMTP] attempt %d/%d starttls error: %v", attempt, maxRetries, err)
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+		}
+
+		if err := client.Auth(smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)); err != nil {
+			client.Quit()
+			conn.Close()
+			lastErr = err
+			log.Printf("[SMTP] attempt %d/%d auth error: %v", attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		if err := client.Mail(smtpFrom); err != nil {
+			client.Quit()
+			conn.Close()
+			lastErr = err
+			log.Printf("[SMTP] attempt %d/%d mail from error: %v", attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		for _, addr := range allRecipients {
+			if err := client.Rcpt(addr); err != nil {
+				client.Quit()
+				conn.Close()
+				lastErr = err
+				log.Printf("[SMTP] attempt %d/%d rcpt error: %v", attempt, maxRetries, err)
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+		}
+
+		w, err := client.Data()
+		if err != nil {
+			client.Quit()
+			conn.Close()
+			lastErr = err
+			log.Printf("[SMTP] attempt %d/%d data error: %v", attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		if _, err := w.Write(msg); err != nil {
+			w.Close()
+			client.Quit()
+			conn.Close()
+			lastErr = err
+			log.Printf("[SMTP] attempt %d/%d write error: %v", attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		w.Close()
+		client.Quit()
+		conn.Close()
+
+		log.Printf("[SMTP] send success on attempt %d", attempt)
+		return nil
+	}
+
+	return fmt.Errorf("smtp failed after %d retries: %w", maxRetries, lastErr)
+}
+
+
