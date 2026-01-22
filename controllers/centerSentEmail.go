@@ -57,12 +57,6 @@ type MailDetail struct {
 	SumTxnAmount string `json:"sumTxnAmount"`
 }
 
-type MailResult struct {
-	TransferId string
-	ShortLink  string
-	FullLink   string
-}
-
 type MailPayload struct {
 	FromHeader string
 	Subject    string
