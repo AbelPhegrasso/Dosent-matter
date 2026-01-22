@@ -50,17 +50,17 @@ type APIResponseToUsers struct {
 }
 
 type MailDetail struct {
-	AccountName  string          `json:"accountName"`
-	MinDateTime  string          `json:"minDateTime"`
-	MaxDateTime  string          `json:"maxDateTime"`
-	SumTxnCount  string          `json:"sumTxnCount"`
-	SumTxnAmount string          `json:"sumTxnAmount"`
+	AccountName  string `json:"accountName"`
+	MinDateTime  string `json:"minDateTime"`
+	MaxDateTime  string `json:"maxDateTime"`
+	SumTxnCount  string `json:"sumTxnCount"`
+	SumTxnAmount string `json:"sumTxnAmount"`
 }
 
 type MailResult struct {
 	TransferId string
-	ShortLink   string
-	FullLink string
+	ShortLink  string
+	FullLink   string
 }
 
 type MailPayload struct {
@@ -69,22 +69,19 @@ type MailPayload struct {
 	Body       string
 	To         []string
 	Bcc        []string
-	ShortLink   string
-	FullLink string
+	ShortLink  string
+	FullLink   string
 	TransferId string
 }
 
 type MailSendResult struct {
-	TransferId	string `json:"transfer_id"`
-	Email		string `json:"email"`
-	ShortLink	string `json:"short_link"`
-	FullLink	string `json:"full_link"`
-	Status		string `json:"status"` // SUCCESS | FAIL
-	Error		string `json:"error,omitempty"`
+	TransferId string `json:"transfer_id"`
+	Email      string `json:"receiver_email"`
+	ShortLink  string `json:"short_link"`
+	FullLink   string `json:"full_link"`
+	Status     string `json:"status"` // SUCCESS | FAIL
+	Error      string `json:"error,omitempty"`
 }
-
-
-
 
 func HandleAPI(c *fiber.Ctx) error {
 	var req ReceiveResFormat
@@ -118,7 +115,7 @@ func HandleAPI(c *fiber.Ctx) error {
 			"error": "Type should be Income or Transfer ",
 		})
 	}
-	
+
 	urlResults, err := GenToken(req)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
@@ -229,15 +226,15 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 			)
 
 			if err == nil {
-			defer resp.Body.Close()
+				defer resp.Body.Close()
 
-			bodyBytes, _ := io.ReadAll(resp.Body)
+				bodyBytes, _ := io.ReadAll(resp.Body)
 
-			var slResp struct {
-				Data struct {
-					ShortLink string `json:"short-link"`
-				} `json:"data"`
-			}
+				var slResp struct {
+					Data struct {
+						ShortLink string `json:"short-link"`
+					} `json:"data"`
+				}
 
 				if err := json.Unmarshal(bodyBytes, &slResp); err == nil {
 					shortUrl = slResp.Data.ShortLink
@@ -289,8 +286,8 @@ func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 		result := MailSendResult{
 			TransferId: r.TransferId,
 			Email:      strings.Join(payload.To, ","),
-			ShortLink:   payload.ShortLink,
-			FullLink:	payload.FullLink,
+			ShortLink:  payload.ShortLink,
+			FullLink:   payload.FullLink,
 		}
 
 		if err != nil {
@@ -306,9 +303,7 @@ func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 	return results
 }
 
-
-
-func gotoMail (m *MailDetail,res APIResponseToUsers) MailPayload{
+func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 
 	m.AccountName = "Name"
 	m.MinDateTime = "2026-01-01"
@@ -336,15 +331,14 @@ func gotoMail (m *MailDetail,res APIResponseToUsers) MailPayload{
         <p>บริษัทฯ ส่วนงานการรับชำระเงิน</p>`,
 		m.AccountName, time.Now().Format("02/01/2006"), m.SumTxnCount, m.SumTxnAmount, link)
 
-
 	return MailPayload{
 		FromHeader: fmt.Sprintf("%s <%s>", fromName, smtpFrom),
 		Subject:    "รายงานโอนเงินกลับประจำวัน",
 		Body:       body,
 		To:         cleanEmails("boxblue779@gmail.com"),
 		Bcc:        cleanEmails(os.Getenv("MAIL_BCC")),
-		ShortLink:   link,
-		FullLink: res.Fullurl,
+		ShortLink:  link,
+		FullLink:   res.Fullurl,
 		TransferId: res.TransferId,
 	}
 
@@ -360,7 +354,7 @@ func sendMail(p MailPayload) error {
 
 	allRecipients := append(p.To, p.Bcc...)
 
-		msg := []byte(
+	msg := []byte(
 		"Return-Path: " + smtpFrom + "\r\n" +
 			"From: " + p.FromHeader + "\r\n" +
 			"To: " + strings.Join(p.To, ",") + "\r\n" +
@@ -372,8 +366,6 @@ func sendMail(p MailPayload) error {
 			p.Body,
 	)
 
-	
-
 	maxRetries := 3
 	var lastErr error
 
@@ -382,7 +374,7 @@ func sendMail(p MailPayload) error {
 		conn, err := net.Dial("tcp", smtpHost+":"+smtpPort)
 		if err != nil {
 			lastErr = err
-			log.Printf("%s [SMTP] attempt %d/%d dial error: %v", p.TransferId,attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d dial error: %v", p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -391,7 +383,7 @@ func sendMail(p MailPayload) error {
 		if err != nil {
 			conn.Close()
 			lastErr = err
-			log.Printf("%s [SMTP] attempt %d/%d client error: %v",p.TransferId, attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d client error: %v", p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -401,7 +393,7 @@ func sendMail(p MailPayload) error {
 				client.Quit()
 				conn.Close()
 				lastErr = err
-				log.Printf("%s [SMTP] attempt %d/%d starttls error: %v",p.TransferId, attempt, maxRetries, err)
+				log.Printf("%s [SMTP] attempt %d/%d starttls error: %v", p.TransferId, attempt, maxRetries, err)
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
 			}
@@ -411,7 +403,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("%s [SMTP] attempt %d/%d auth error: %v",p.TransferId, attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d auth error: %v", p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -420,7 +412,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("%s [SMTP] attempt %d/%d mail from error: %v",p.TransferId, attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d mail from error: %v", p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -430,7 +422,7 @@ func sendMail(p MailPayload) error {
 				client.Quit()
 				conn.Close()
 				lastErr = err
-				log.Printf("%s [SMTP] attempt %d/%d rcpt error: %v",p.TransferId, attempt, maxRetries, err)
+				log.Printf("%s [SMTP] attempt %d/%d rcpt error: %v", p.TransferId, attempt, maxRetries, err)
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
 			}
@@ -441,7 +433,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("%s [SMTP] attempt %d/%d data error: %v",p.TransferId, attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d data error: %v", p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -451,7 +443,7 @@ func sendMail(p MailPayload) error {
 			client.Quit()
 			conn.Close()
 			lastErr = err
-			log.Printf("%s [SMTP] attempt %d/%d write error: %v",p.TransferId, attempt, maxRetries, err)
+			log.Printf("%s [SMTP] attempt %d/%d write error: %v", p.TransferId, attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
@@ -460,11 +452,9 @@ func sendMail(p MailPayload) error {
 		client.Quit()
 		conn.Close()
 
-		log.Printf("%s [SMTP] send success on attempt %d",p.TransferId, attempt)
+		log.Printf("%s [SMTP] send success on attempt %d", p.TransferId, attempt)
 		return nil
 	}
 
 	return fmt.Errorf("smtp failed after %d retries: %w", maxRetries, lastErr)
 }
-
-

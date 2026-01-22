@@ -1,8 +1,8 @@
 package main
 
 import (
-	r "good/routes"
 	"log"
+	r "pond/routes"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
