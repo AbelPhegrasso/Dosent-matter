@@ -218,9 +218,10 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				"application/json",
 				bytes.NewBuffer(jsonBody),
 			)
-			if err != nil {
-				log.Printf("Attempt %d/%d failed for token %s: %v", attempt, maxRetries, token.Token, err)
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("Shortlink's Attempt %d/%d failed (HTTP Status %s)", attempt, maxRetries, resp.Status)
 				shortUrl = ""
+				continue
 			}
 			if err == nil {
 				defer resp.Body.Close()
@@ -308,7 +309,7 @@ func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 
 	link := res.Shoturl
 	if link == "" {
-		link = res.Fullurl
+		link = "not available"
 	}
 
 	fromName := os.Getenv("MAIL_FROM_NAME")
