@@ -221,6 +221,9 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 			if resp.StatusCode != http.StatusOK {
 				log.Printf("Shortlink's Attempt %d/%d failed (HTTP Status %s)", attempt, maxRetries, resp.Status)
 				shortUrl = ""
+				if attempt < maxRetries {
+					time.Sleep(3 * time.Second)
+				}
 				continue
 			}
 			if err == nil {
@@ -240,9 +243,6 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				break
 			}
 
-			if attempt < maxRetries {
-				time.Sleep(3 * time.Second)
-			}
 		}
 		r := APIResponseToUsers{
 			TransferId: token.TransferId,
