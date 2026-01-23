@@ -218,7 +218,10 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				"application/json",
 				bytes.NewBuffer(jsonBody),
 			)
-
+			if err != nil {
+				log.Printf("Attempt %d/%d failed for token %s: %v", attempt, maxRetries, token.Token, err)
+				shortUrl = ""
+			}
 			if err == nil {
 				defer resp.Body.Close()
 
@@ -235,8 +238,6 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				}
 				break
 			}
-
-			log.Printf("Attempt %d/%d failed for token %s: %v", attempt, maxRetries, token.Token, err)
 
 			if attempt < maxRetries {
 				time.Sleep(3 * time.Second)
