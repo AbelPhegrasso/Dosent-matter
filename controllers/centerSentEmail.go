@@ -218,7 +218,7 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				"application/json",
 				bytes.NewBuffer(jsonBody),
 			)
-			if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode != 200 {
 				log.Printf("Shortlink's Attempt %d/%d failed (HTTP Status %s)", attempt, maxRetries, resp.Status)
 				shortUrl = ""
 				if attempt < maxRetries {
