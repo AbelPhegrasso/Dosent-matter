@@ -15,6 +15,8 @@ import (
 
 	"time"
 
+	"pond/database"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
@@ -43,10 +45,12 @@ type TokenWithId struct {
 	Token      string `json:"token"`
 }
 type APIResponseToUsers struct {
-	TransferId string `json:"transfer_id"`
-	Token      string `json:"token"`
-	Fullurl    string `json:"full_url"`
-	Shoturl    string `json:"short_url"`
+	TransferId  string `json:"transfer_id"`
+	Token       string `json:"token"`
+	Fullurl     string `json:"full_url"`
+	Shoturl     string `json:"short_url"`
+	Corporation string `json:"corporation_name"`
+	Corpemail   string `json:"corporation_email"`
 }
 
 type MailDetail struct {
@@ -58,23 +62,27 @@ type MailDetail struct {
 }
 
 type MailPayload struct {
-	FromHeader string
-	Subject    string
-	Body       string
-	To         []string
-	Bcc        []string
-	ShortLink  string
-	FullLink   string
-	TransferId string
+	FromHeader  string
+	Subject     string
+	Body        string
+	To          []string
+	Bcc         []string
+	ShortLink   string
+	FullLink    string
+	TransferId  string
+	Corporation string
+	Corpemail   string
 }
 
 type MailSendResult struct {
-	TransferId string `json:"transfer_id"`
-	Email      string `json:"receiver_email"`
-	ShortLink  string `json:"short_link"`
-	FullLink   string `json:"full_link"`
-	Status     string `json:"status"` // SUCCESS | FAIL
-	Error      string `json:"error,omitempty"`
+	TransferId  string `json:"transfer_id"`
+	Email       string `json:"receiver_email"`
+	ShortLink   string `json:"short_link"`
+	FullLink    string `json:"full_link"`
+	Status      string `json:"status"` // SUCCESS | FAIL
+	Error       string `json:"error,omitempty"`
+	Corporation string `json:"corporation_name"`
+	Corpemail   string `json:"corporation_email"`
 }
 
 func HandleAPI(c *fiber.Ctx) error {
@@ -218,7 +226,7 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 				"application/json",
 				bytes.NewBuffer(jsonBody),
 			)
-			if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode != 200 {
 				log.Printf("Shortlink's Attempt %d/%d failed (HTTP Status %s)", attempt, maxRetries, resp.Status)
 				shortUrl = ""
 				if attempt < maxRetries {
@@ -244,11 +252,27 @@ func UrlCreate(tkid []TokenWithId) ([]APIResponseToUsers, error) {
 			}
 
 		}
+		// Add Corporation field to the response
+		db := database.DBConn
+		// qeury to get corporation name from transfer id form token.transferId
+		var corpQuery struct {
+			Name  string `gorm:"column:NAME"`
+			Email string `gorm:"column:EMAIL"`
+		}
+
+		err = db.Table("info").Select("NAME", "EMAIL").Where("TRANSFER_ID = ?", token.TransferId).Scan(&corpQuery).Error
+
+		if err != nil {
+			log.Printf("Error querying corporation for Transfer ID %s: %v", token.TransferId, err)
+		}
+
 		r := APIResponseToUsers{
-			TransferId: token.TransferId,
-			Token:      token.Token,
-			Fullurl:    fullUrl,
-			Shoturl:    shortUrl,
+			TransferId:  token.TransferId,
+			Token:       token.Token,
+			Fullurl:     fullUrl,
+			Shoturl:     shortUrl,
+			Corporation: corpQuery.Name, // Set the corporation name here after querying the database
+			Corpemail:   corpQuery.Email,
 		}
 		res = append(res, r)
 	}
@@ -281,10 +305,12 @@ func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 		err := sendMail(payload)
 
 		result := MailSendResult{
-			TransferId: r.TransferId,
-			Email:      strings.Join(payload.To, ","),
-			ShortLink:  payload.ShortLink,
-			FullLink:   payload.FullLink,
+			TransferId:  r.TransferId,
+			Email:       strings.Join(payload.To, ","),
+			ShortLink:   payload.ShortLink,
+			FullLink:    payload.FullLink,
+			Corporation: payload.Corporation,
+			Corpemail:   payload.Corpemail,
 		}
 
 		if err != nil {
@@ -311,7 +337,7 @@ func generateCaseNumber() string {
 	return fmt.Sprintf("OPS-%s", time.Now().Format("20060102-150405"))
 }
 
-//เช็ค error หลังเชื่อม db
+// เช็ค error หลังเชื่อม db
 func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 
 	m.AccountName = "Name"
@@ -344,12 +370,14 @@ func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 		FromHeader: fmt.Sprintf("%s <%s>", fromName, smtpFrom),
 		Subject:    "รายงานโอนเงินกลับประจำวัน",
 		Body:       body,
-		To:         cleanEmails("boxblue779@gmail.com"),
+		To:         cleanEmail(res.Corpemail),
 		//		To:         cleanEmails("boxblue779@gmail.com"),
-		Bcc:        cleanEmails(os.Getenv("MAIL_BCC")),
-		ShortLink:  link,
-		FullLink:   res.Fullurl,
-		TransferId: res.TransferId,
+		Bcc:         cleanEmails(os.Getenv("MAIL_BCC")),
+		ShortLink:   link,
+		FullLink:    res.Fullurl,
+		TransferId:  res.TransferId,
+		Corporation: res.Corporation,
+		Corpemail:   res.Corpemail,
 	}
 
 }
