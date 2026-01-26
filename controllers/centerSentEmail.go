@@ -70,8 +70,8 @@ type MailPayload struct {
 	ShortLink   string
 	FullLink    string
 	TransferId  string
-	Corporation string
-	Corpemail   string
+	Corporation []string
+	Corpemail   []string
 }
 
 type MailSendResult struct {
@@ -302,21 +302,27 @@ func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 		var mail MailDetail
 		payload := gotoMail(&mail, r)
 
-		err := sendMail(payload)
+		var err error
+		
+		if len(payload.To) == 0 || payload.To[0] == "" {
+			err = fmt.Errorf("no valid recipient email found for transfer_id: %s", r.TransferId)
+		} else {
+			err = sendMail(payload)
+		}
 
 		result := MailSendResult{
 			TransferId:  r.TransferId,
 			Email:       strings.Join(payload.To, ","),
 			ShortLink:   payload.ShortLink,
 			FullLink:    payload.FullLink,
-			Corporation: payload.Corporation,
-			Corpemail:   payload.Corpemail,
+			Corporation: strings.Join(payload.Corporation, ","),
+			Corpemail:   strings.Join(payload.Corpemail, ","),
 		}
 
-		if err != nil {
+		if err != nil  {
 			result.Status = "FAIL"
 			result.Error = err.Error()
-			failedAccounts = append(failedAccounts, mail.AccountName)
+			failedAccounts = append(failedAccounts, result.Corporation)
 		} else {
 			result.Status = "SUCCESS"
 		}
@@ -364,7 +370,7 @@ func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
         <p>E-mail : online-support@inet.co.th</p>
         <p>ขอแสดงความนับถือ</p>
         <p>บริษัทฯ ส่วนงานการรับชำระเงิน</p>`,
-		m.AccountName, time.Now().Format("02/01/2006"), m.SumTxnCount, m.SumTxnAmount, link)
+		res.Corporation, time.Now().Format("02/01/2006"), m.SumTxnCount, m.SumTxnAmount, link)
 
 	return MailPayload{
 		FromHeader: fmt.Sprintf("%s <%s>", fromName, smtpFrom),
@@ -372,12 +378,12 @@ func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 		Body:       body,
 		To:         cleanEmail(res.Corpemail),
 		//		To:         cleanEmails("boxblue779@gmail.com"),
-		Bcc:         cleanEmails(os.Getenv("MAIL_BCC")),
+		// Bcc:         cleanEmails(os.Getenv("MAIL_BCC")),
 		ShortLink:   link,
 		FullLink:    res.Fullurl,
 		TransferId:  res.TransferId,
-		Corporation: res.Corporation,
-		Corpemail:   res.Corpemail,
+		Corporation: cleanEmail(res.Corporation),
+		Corpemail:   cleanEmail(res.Corpemail),
 	}
 
 }
@@ -497,7 +503,7 @@ func sendMail(p MailPayload) error {
 	return fmt.Errorf("smtp failed after %d retries: %w", maxRetries, lastErr)
 }
 
-func SendErrorNotification(mainCaseNumber string, accountNamesList string) {
+func SendErrorNotification(mainCaseNumber string,accountNamesList string) {
 	log.Printf("[%s] [EXCEPT] SendErrorNotification Function in Catch Error.", mainCaseNumber)
 	log.Printf("[%s] [EXCEPT] Data accountNamesList in list %s", mainCaseNumber, accountNamesList)
 
@@ -522,7 +528,7 @@ func SendErrorNotification(mainCaseNumber string, accountNamesList string) {
 	bodyBuilder.WriteString("</ol><p>ขอขอบคุณมา ณ ที่นี้</p><p>INET Online Payment Service</p>")
 	body := bodyBuilder.String()
 
-	errorToMail := os.Getenv("ERROR_TO_MAIL")
+	errorToMail := os.Getenv("SMTP_SUPPORT")
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USER")
