@@ -271,6 +271,7 @@ func cleanEmail(emails string) []string {
 func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 
 	var results []MailSendResult
+	var failedAccounts []string
 
 	for _, r := range urlResults {
 
@@ -289,6 +290,7 @@ func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 		if err != nil {
 			result.Status = "FAIL"
 			result.Error = err.Error()
+			failedAccounts = append(failedAccounts, mail.AccountName)
 		} else {
 			result.Status = "SUCCESS"
 		}
@@ -296,9 +298,20 @@ func processMailSend(urlResults []APIResponseToUsers) []MailSendResult {
 		results = append(results, result)
 	}
 
+	if len(failedAccounts) > 0 {
+		mainCaseNumber := generateCaseNumber()
+		accountNamesList := strings.Join(failedAccounts, "\n")
+		SendErrorNotification(mainCaseNumber, accountNamesList)
+	}
+
 	return results
 }
 
+func generateCaseNumber() string {
+	return fmt.Sprintf("OPS-%s", time.Now().Format("20060102-150405"))
+}
+
+//เช็ค error หลังเชื่อม db
 func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 
 	m.AccountName = "Name"
@@ -332,6 +345,7 @@ func gotoMail(m *MailDetail, res APIResponseToUsers) MailPayload {
 		Subject:    "รายงานโอนเงินกลับประจำวัน",
 		Body:       body,
 		To:         cleanEmails("boxblue779@gmail.com"),
+		//		To:         cleanEmails("boxblue779@gmail.com"),
 		Bcc:        cleanEmails(os.Getenv("MAIL_BCC")),
 		ShortLink:  link,
 		FullLink:   res.Fullurl,
@@ -453,4 +467,130 @@ func sendMail(p MailPayload) error {
 	}
 
 	return fmt.Errorf("smtp failed after %d retries: %w", maxRetries, lastErr)
+}
+
+func SendErrorNotification(mainCaseNumber string, accountNamesList string) {
+	log.Printf("[%s] [EXCEPT] SendErrorNotification Function in Catch Error.", mainCaseNumber)
+	log.Printf("[%s] [EXCEPT] Data accountNamesList in list %s", mainCaseNumber, accountNamesList)
+
+	accountNames := strings.Split(strings.TrimSpace(accountNamesList), "\n")
+	var cleanedNames []string
+	for _, name := range accountNames {
+		trimmed := strings.TrimSpace(name)
+		if trimmed != "" {
+			cleanedNames = append(cleanedNames, trimmed)
+		}
+	}
+
+	log.Printf("[%s] [EXCEPT] Data accountNames to send %v", mainCaseNumber, cleanedNames)
+
+	var bodyBuilder strings.Builder
+	bodyBuilder.WriteString("<p>เรียน ผู้ใช้งาน,</p><p>บริษัทฯ ขอแจ้งว่า <strong>ไม่สามารถส่งรายงานการโอนเงิน</strong> ของระบบ Online Payment Services (OPS)</p><p>โดยรายงานดังกล่าวเป็นรายงานการชำระเงินของบริษัทดังต่อไปนี้:</p><ol>")
+
+	for _, accountName := range cleanedNames {
+		bodyBuilder.WriteString(fmt.Sprintf("<li>%s</li>", accountName))
+	}
+
+	bodyBuilder.WriteString("</ol><p>ขอขอบคุณมา ณ ที่นี้</p><p>INET Online Payment Service</p>")
+	body := bodyBuilder.String()
+
+	errorToMail := os.Getenv("ERROR_TO_MAIL")
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPass := os.Getenv("SMTP_PASS")
+
+	if errorToMail == "" {
+		log.Printf("[%s] [EXCEPT] Invalid error_to_e-mail address is null or wrong format", mainCaseNumber)
+		return
+	}
+
+	subject := fmt.Sprintf("[Case No.[%s][EXCEPT] ส่งรายงานการรับเงินประจำวันไม่สำเร็จ", mainCaseNumber)
+	fromEmail := "no-reply@thaidotcompayment.co.th"
+	fromName := "INET Online Payment Service"
+	fromHeader := fmt.Sprintf("%s <%s>", fromName, fromEmail)
+
+	recipients := cleanEmail(errorToMail)
+
+	msg := []byte(
+		"Return-Path: " + fromEmail + "\r\n" +
+			"From: " + fromHeader + "\r\n" +
+			"To: " + strings.Join(recipients, ",") + "\r\n" +
+			"Subject: " + subject + "\r\n" +
+			"Date: " + time.Now().Format(time.RFC1123Z) + "\r\n" +
+			"Message-ID: <" + fmt.Sprintf("%d", time.Now().UnixNano()) + "@thaidotcompayment.co.th>\r\n" +
+			"MIME-Version: 1.0\r\n" +
+			"Content-Type: text/html; charset=UTF-8\r\n\r\n" +
+			body,
+	)
+
+	conn, err := net.Dial("tcp", smtpHost+":"+smtpPort)
+	if err != nil {
+		log.Printf("[%s] [EXCEPT] dial error: %v", mainCaseNumber, err)
+		return
+	}
+
+	client, err := smtp.NewClient(conn, smtpHost)
+	if err != nil {
+		conn.Close()
+		log.Printf("[%s] [EXCEPT] client error: %v", mainCaseNumber, err)
+		return
+	}
+
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err := client.StartTLS(&tls.Config{ServerName: smtpHost}); err != nil {
+			client.Quit()
+			conn.Close()
+			log.Printf("[%s] [EXCEPT] starttls error: %v", mainCaseNumber, err)
+			return
+		}
+	}
+
+	if err := client.Auth(smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)); err != nil {
+		client.Quit()
+		conn.Close()
+		log.Printf("[%s] [EXCEPT] auth error: %v", mainCaseNumber, err)
+		return
+	}
+
+	if err := client.Mail(fromEmail); err != nil {
+		client.Quit()
+		conn.Close()
+		log.Printf("[%s] [EXCEPT] mail from error: %v", mainCaseNumber, err)
+		return
+	}
+
+	for _, addr := range recipients {
+		if err := client.Rcpt(addr); err != nil {
+			client.Quit()
+			conn.Close()
+			log.Printf("[%s] [EXCEPT] rcpt error: %v", mainCaseNumber, err)
+			return
+		}
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		client.Quit()
+		conn.Close()
+		log.Printf("[%s] [EXCEPT] data error: %v", mainCaseNumber, err)
+		return
+	}
+
+	if _, err := w.Write(msg); err != nil {
+		w.Close()
+		client.Quit()
+		conn.Close()
+		log.Printf("[%s] [EXCEPT] write error: %v", mainCaseNumber, err)
+		return
+	}
+
+	w.Close()
+	client.Quit()
+	conn.Close()
+
+	log.Printf("[%s] [EXCEPT] Message Data: From: %s, To: %s, Subject: %s", mainCaseNumber, fromEmail, strings.Join(recipients, ", "), subject)
+	log.Printf("[%s] [EXCEPT] SMTP Data: Host: %s, Port: %s, EnableSsl: false, From: %s, To: %s, Subject: %s", mainCaseNumber, smtpHost, smtpPort, fromEmail, strings.Join(recipients, ", "), subject)
+	log.Printf("[%s] [EXCEPT] Notification email sent to admin successfully.", mainCaseNumber)
+	log.Printf("[%s] [EXCEPT] end of SendErrorNotification Function.", mainCaseNumber)
 }
